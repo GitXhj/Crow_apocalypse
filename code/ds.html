@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>末日黄昏 · 乌鸦盘旋</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0608;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  /* 轻微的边缘压暗，与后期暗角叠加，让画面更有胶片感 */
+  #vignette-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+    background: radial-gradient(ellipse at 50% 52%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.35) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  /* =======================================================================
+     ★ 悬浮文字层
+     位于画面下半部分，覆盖在山体黑色剪影之上
+     字体：无外部依赖的系统艺术字体栈，边缘锋利、窄体高对比
+     ======================================================================= */
+  .overlay-text {
+    position: fixed;
+    left: 50%;
+    bottom: 15vh;                /* 落在画面下半部分的山体剪影上 */
+    transform: translateX(-50%);
+    z-index: 20;
+
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    white-space: nowrap;
+
+    /* 让文字在暗背景上清晰可辨 */
+    isolation: isolate;
+  }
+
+  /* 持续轻微上下浮动，营造“悬浮”感 */
+  .text-float {
+    display: inline-block;
+    animation: floatBob 7s ease-in-out infinite;
+    animation-delay: 2s;
+  }
+
+  /* 文字本体：艺术感英文字体，全大写，锋利边缘 */
+  .text-inner {
+    display: inline-block;
+
+    font-family:
+      "Haettenschweiler",
+      "Impact",
+      "Franklin Gothic Heavy",
+      "Arial Narrow",
+      "Arial Black",
+      "Helvetica Neue",
+      sans-serif;
+    font-weight: 900;
+    font-size: clamp(26px, 7.2vw, 104px);
+    line-height: 1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;   /* 数字等宽，时间不抖动 */
+
+    color: #e0b487;
+    text-shadow:
+      0 0 16px rgba(255, 150, 70, 0.30),
+      0 0 70px rgba(255, 110, 45, 0.16),
+      0 6px 40px rgba(0, 0, 0, 0.90);
+
+    transition: color 0.6s ease;
+    will-change: transform, opacity, filter, letter-spacing;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 入场：从底部向上浮出 */
+  .text-inner.rise {
+    animation: textRise 1.8s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+  }
+
+  /* 悬停 / 聚焦：微微变亮 */
+  .overlay-text:hover .text-inner,
+  .overlay-text:focus-visible .text-inner {
+    color: #f7d6ae;
+  }
+
+  .overlay-text:focus-visible {
+    outline: none;
+  }
+
+  /* 从下方浮出：位移 + 透明 + 字距收拢 + 模糊消散 */
+  @keyframes textRise {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 110px, 0);
+      letter-spacing: 0.46em;
+      filter: blur(12px);
+    }
+    55% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+      letter-spacing: 0.12em;
+      filter: blur(0);
+    }
+  }
+
+  /* 持续悬浮 */
+  @keyframes floatBob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-12px); }
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+
+<body>
+
+<!-- 后期暗角叠层 -->
+<div id="vignette-overlay"></div>
+
+<!-- =======================================================================
+     悬浮文字：初始显示 APOCALYPSE，点击后切换为当前时间 HH:MM
+     ======================================================================= -->
+<div id="overlayText" class="overlay-text" role="button" tabindex="0"
+     aria-label="点击显示当前时间">
+  <span class="text-float">
+    <span class="text-inner rise" id="textInner">APOCALYPSE</span>
+  </span>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer }   from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass }       from 'three/addons/postprocessing/ShaderPass.js';
+
+/* =========================================================================
+   0. 程序化噪声工具（不依赖任何外部资源）
+   ========================================================================= */
+function hash2D(x, y) {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+function valueNoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi,        yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash2D(xi,     yi);
+  const b = hash2D(xi + 1, yi);
+  const c = hash2D(xi,     yi + 1);
+  const d = hash2D(xi + 1, yi + 1);
+  return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+}
+function fbm2(x, y, octaves = 4) {
+  let sum = 0, amp = 0.5, freq = 1;
+  for (let i = 0; i < octaves; i++) {
+    sum  += amp * valueNoise(x * freq, y * freq);
+    freq *= 2.03;
+    amp  *= 0.5;
+  }
+  return sum;
+}
+
+/* =========================================================================
+   ★★★ 音频配置区（唯一需要你填写的地方） ★★★
+   -------------------------------------------------------------------------
+   CROW_AUDIO_URL：填写你的乌鸦音效地址（mp3 / ogg / wav 均可）
+                   本地文件可用相对路径，例如 './crow.mp3'
+                   也可以填写 https 开头的网络地址
+                   留空字符串 '' 则不播放任何声音
+   ========================================================================= */
+const CROW_AUDIO_URL = '';        // ★ 在这里填写音频 URL
+
+const CROW_AUDIO_VOLUME   = 0.6;  // 音量：原音量的 60%
+const CROW_AUDIO_INTERVAL = 5.0;  // 播放结束后，间隔 5 秒再播放下一次
+
+/* =========================================================================
+   1. 渲染器 / 场景 / 相机
+   ========================================================================= */
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance'
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+// 尘土弥漫的空气。密度经过场景尺度校准，能见度很低但远山仍保留剪影层次。
+scene.fog = new THREE.FogExp2(0x8a5a3a, 0.0082);
+
+const camera = new THREE.PerspectiveCamera(
+  55,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  2200
+);
+
+/* =========================================================================
+   2. 天空：巨大的内表面球体 + 渐变着色器
+      —— 绝对不存在太阳 Mesh / Sprite / 光球。
+      光源只通过地平线附近最亮的暖色渐变来暗示。
+   ========================================================================= */
+const skyUniforms = {
+  uTime: { value: 0 }
+};
+
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  fog: false,
+  uniforms: skyUniforms,
+  vertexShader: /* glsl */`
+    varying vec3 vWorldDir;
+    void main() {
+      vWorldDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform float uTime;
+    varying vec3 vWorldDir;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i),               hash(i + vec2(1.0, 0.0)), u.x),
+                 mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p *= 2.02;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    void main() {
+      vec3 dir = normalize(vWorldDir);
+      float h = dir.y;
+
+      // —— 指定色板 ——
+      vec3 cHorizon = vec3(0.878, 0.541, 0.235); // #e08a3c 暗橙
+      vec3 cWarm    = vec3(0.788, 0.478, 0.227); // #c97a3a 昏黄
+      vec3 cMid     = vec3(0.353, 0.227, 0.290); // #5a3a4a 灰紫
+      vec3 cTop     = vec3(0.071, 0.039, 0.071); // #120a12 深黑紫
+
+      float t = clamp(h * 1.18 + 0.015, 0.0, 1.0);
+
+      vec3 col = mix(cHorizon, cWarm, smoothstep(0.00, 0.10, t));
+      col = mix(col, cMid, smoothstep(0.06, 0.44, t));
+      col = mix(col, cTop, smoothstep(0.38, 0.96, t));
+
+      // 地平线以下：沉闷的褐色地气，避免出现纯黑断层
+      float below = clamp(-h * 4.0, 0.0, 1.0);
+      col = mix(col, vec3(0.155, 0.088, 0.058), below);
+
+      // —— 缓慢移动的噪声云层（灰紫，低透明度）——
+      vec2 uv = dir.xz / (abs(h) + 0.26);
+      float n1 = fbm(uv * 0.85 + vec2(uTime * 0.0062, uTime * 0.0041));
+      float n2 = fbm(uv * 2.35 - vec2(uTime * 0.0094, uTime * 0.0032));
+      float cloud = smoothstep(0.44, 0.88, n1 * 0.72 + n2 * 0.38);
+
+      // 云层主要遮住地平线最亮处，让"光源"更含蓄
+      float band = smoothstep(-0.03, 0.32, h) * (1.0 - smoothstep(0.22, 0.78, h));
+      col = mix(col, vec3(0.198, 0.128, 0.170), cloud * band * 0.66);
+
+      // 地平线最亮处：一层极柔和的暖辉，暗示夕阳刚刚落下去
+      float glow = exp(-abs(h) * 8.5);
+      col += vec3(0.36, 0.16, 0.045) * glow;
+
+      // 顶部再压暗一点，加强压抑感
+      col *= 1.0 - smoothstep(0.45, 1.0, h) * 0.30;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+});
+
+const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 64, 40), skyMat);
+scene.add(sky);
+
+/* =========================================================================
+   3. 光照：不存在任何可见光源物体
+      —— DirectionalLight 模拟已经沉到山后的夕阳（低位、逆光）
+   ========================================================================= */
+const sunLight = new THREE.DirectionalLight(0xff9a4d, 2.6);
+sunLight.position.set(-70, 12, -210);   // 低位、从山后打来
+sunLight.target.position.set(0, 20, -45);
+scene.add(sunLight);
+scene.add(sunLight.target);
+
+const ambient = new THREE.AmbientLight(0x2a1a1a, 0.30);
+scene.add(ambient);
+
+const hemi = new THREE.HemisphereLight(0x3a2a3a, 0x1a0f0a, 0.40);
+hemi.position.set(0, 60, 0);
+scene.add(hemi);
+
+// 一盏极弱的补光，避免近山完全糊成黑色（不产生高光，不制造光源感）
+const fill = new THREE.DirectionalLight(0x6a4a3a, 0.25);
+fill.position.set(40, 30, 80);
+scene.add(fill);
+
+/* =========================================================================
+   4. 山体：PlaneGeometry 顶点位移生成荒山
+   ========================================================================= */
+function terrainHeight(x, z) {
+  // 大尺度丘陵起伏（低频）
+  let h = fbm2(x * 0.0065 + 13.1, z * 0.0065 + 5.3, 4) * 34.0 - 14.0;
+  // 中高频细节 —— 干裂、碎石感
+  h += fbm2(x * 0.030 + 3.7, z * 0.030 + 9.1, 4) * 5.0 - 2.0;
+  // 山脊状沟壑
+  const ridge = 1.0 - Math.abs(fbm2(x * 0.021 + 71.0, z * 0.021 + 33.0, 3) * 2.0 - 1.0);
+  h += ridge * 2.6;
+  // 主峰：位于 (0, -45) 附近，沿 X 轴略微拉伸
+  const dx = x - 0.0;
+  const dz = z + 45.0;
+  const d2 = dx * dx * 0.78 + dz * dz * 0.52;
+  h += 30.0 * Math.exp(-d2 / (2.0 * 32.0 * 32.0));
+  return h;
+}
+
+const TERRAIN_SIZE = 340;
+const TERRAIN_SEG  = 200;
+
+const terrainGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEG, TERRAIN_SEG);
+terrainGeo.rotateX(-Math.PI / 2);
+
+{
+  const pos = terrainGeo.attributes.position;
+  const count = pos.count;
+
+  // 顶点色：低处近黑，中段暗褐 #3a2418，山脊稍暖
+  const cLow  = new THREE.Color(0x140b06);
+  const cMid  = new THREE.Color(0x2a1a12);
+  const cHigh = new THREE.Color(0x3a2418);
+  const colors = new Float32Array(count * 3);
+  const tmp = new THREE.Color();
+
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const y = terrainHeight(x, z);
+    pos.setY(i, y);
+
+    // 颜色按高度插值
+    if (y < 7.0) {
+      tmp.copy(cLow).lerp(cMid, THREE.MathUtils.smoothstep(y, -4.0, 7.0));
+    } else {
+      tmp.copy(cMid).lerp(cHigh, THREE.MathUtils.smoothstep(y, 7.0, 26.0));
+    }
+    // 轻微随机扰动，避免色带过于平滑
+    const jitter = 0.9 + hash2D(x * 0.7, z * 0.7) * 0.22;
+    colors[i * 3 + 0] = tmp.r * jitter;
+    colors[i * 3 + 1] = tmp.g * jitter;
+    colors[i * 3 + 2] = tmp.b * jitter;
+  }
+
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeo.computeVertexNormals();
+}
+
+const terrainMat = new THREE.MeshStandardMaterial({
+  vertexColors: true,
+  roughness: 1.0,
+  metalness: 0.0,
+  flatShading: false
+});
+
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+scene.add(terrain);
+
+/* =========================================================================
+   5. 远山：低多边形锥体叠加，配雾形成层层剪影
+   ========================================================================= */
+function createFarPeak(x, z, radius, height, color, seed) {
+  const geo = new THREE.ConeGeometry(radius, height, 6, 2);
+  geo.rotateY(seed * 2.7);
+
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), pz = pos.getZ(i);
+    const n = fbm2(px * 0.07 + seed * 13.0, pz * 0.07 + seed * 7.0, 2);
+    pos.setX(i, px * (0.78 + n * 0.62));
+    pos.setZ(i, pz * (0.78 + n * 0.62));
+  }
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 1.0,
+    metalness: 0.0
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, height * 0.5 - 16, z);
+  return mesh;
+}
+
+const farPeaks = new THREE.Group();
+const peakDefs = [
+  [-160, -175,  95,  58, 0x2a1a22, 0.31],
+  [  30, -200, 120,  72, 0x27181f, 0.77],
+  [ 175, -190,  90,  54, 0x2a1a22, 0.12],
+  [-260, -235, 140,  78, 0x231620, 0.55],
+  [ 130, -265, 155,  86, 0x1f131c, 0.94],
+  [ -60, -300, 175,  96, 0x1c1119, 0.42],
+  [ 300, -310, 160,  82, 0x1c1119, 0.68],
+  [-340, -330, 180, 100, 0x181016, 0.23]
+];
+peakDefs.forEach(d => {
+  farPeaks.add(createFarPeak(d[0], d[1], d[2], d[3], d[4], d[5]));
+});
+scene.add(farPeaks);
+
+/* =========================================================================
+   6. 乌鸦群：纯黑剪影，缓慢机械地扇翅盘旋
+   ========================================================================= */
+const CROW_COUNT = 52;
+
+const crowMat = new THREE.MeshBasicMaterial({
+  color: 0x08080c,           // 比山更黑的冷调
+  side: THREE.DoubleSide,
+  fog: false                 // 保持纯粹的剪影，不被暖雾染色
+});
+
+// 身体：拉长的椭球
+const crowBodyGeo = new THREE.SphereGeometry(0.5, 7, 5);
+crowBodyGeo.scale(0.50, 0.44, 1.50);
+
+// 翅膀：一片薄三角
+const crowWingGeo = new THREE.BufferGeometry();
+crowWingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+   0.00, 0.00,  0.34,   // 翼根前缘
+   1.38, 0.00, -0.14,   // 翼尖
+   0.05, 0.00, -0.44    // 翼根后缘
+]), 3));
+crowWingGeo.computeVertexNormals();
+
+const crowGroup = new THREE.Group();
+scene.add(crowGroup);
+
+const crows = [];
+const CROW_CENTER = new THREE.Vector3(0, 43, -45);   // 盘旋中心：主峰正上方
+
+for (let i = 0; i < CROW_COUNT; i++) {
+  const g = new THREE.Group();
+
+  const body = new THREE.Mesh(crowBodyGeo, crowMat);
+
+  const wingL = new THREE.Mesh(crowWingGeo, crowMat);
+  wingL.scale.x = -1;                        // 镜像出左翼
+  wingL.position.set(-0.08, 0.02, 0);
+
+  const wingR = new THREE.Mesh(crowWingGeo, crowMat);
+  wingR.position.set(0.08, 0.02, 0);
+
+  g.add(body, wingL, wingR);
+
+  const s = 0.72 + Math.random() * 0.72;
+  g.scale.setScalar(s);
+
+  crowGroup.add(g);
+
+  crows.push({
+    group: g,
+    wingL, wingR,
+    center: new THREE.Vector3(
+      CROW_CENTER.x + (Math.random() - 0.5) * 14,
+      CROW_CENTER.y + (Math.random() - 0.5) * 16,
+      CROW_CENTER.z + (Math.random() - 0.5) * 14
+    ),
+    baseRadius: 7 + Math.random() * 21,
+    speed: (0.10 + Math.random() * 0.16) * (Math.random() < 0.5 ? 1 : -1),
+    phase: Math.random() * Math.PI * 2,
+    flapSpeed: 5.2 + Math.random() * 3.6,
+    flapPhase: Math.random() * Math.PI * 2,
+    bob: 2.0 + Math.random() * 2.4,
+    hover: (Math.random() - 0.5) * 5.0
+  });
+}
+
+// 乌鸦位置参数方程
+const _crowPos = new THREE.Vector3();
+const _crowNext = new THREE.Vector3();
+function evalCrowPos(c, t, out) {
+  const a = t * c.speed + c.phase;
+  const r = c.baseRadius + Math.sin(t * 0.3 + c.phase) * 3.0;
+  out.x = c.center.x + Math.cos(a) * r;
+  out.z = c.center.z + Math.sin(a) * r;
+  out.y = c.center.y + c.hover + Math.sin(t * 0.7 + c.phase) * c.bob;
+  return out;
+}
+
+/* =========================================================================
+   7. 尘土与余烬
+   ========================================================================= */
+const DUST_COUNT = 13000;
+
+function buildDust() {
+  const geo = new THREE.BufferGeometry();
+  const pos   = new Float32Array(DUST_COUNT * 3);
+  const size  = new Float32Array(DUST_COUNT);
+  const phase = new Float32Array(DUST_COUNT);
+  const alpha = new Float32Array(DUST_COUNT);
+  const col   = new Float32Array(DUST_COUNT * 3);
+
+  const cDust   = new THREE.Color(0xc89a6b);
+  const cBright = new THREE.Color(0xffc98f);
+  const tmp = new THREE.Color();
+
+  for (let i = 0; i < DUST_COUNT; i++) {
+    pos[i * 3 + 0] = (Math.random() - 0.5) * 210;
+    pos[i * 3 + 1] = Math.random() * 78 - 10;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 280 - 45;
+
+    size[i]  = 0.030 + Math.pow(Math.random(), 2.2) * 0.115;
+    phase[i] = Math.random();
+    alpha[i] = 0.10 + Math.random() * 0.46;
+
+    // 一小部分粒子偏亮、偏暖 —— 逆光方向微微发亮的尘埃
+    const k = Math.random();
+    tmp.copy(cDust).lerp(cBright, k * k * k);
+    col[i * 3 + 0] = tmp.r;
+    col[i * 3 + 1] = tmp.g;
+    col[i * 3 + 2] = tmp.b;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aSize',    new THREE.BufferAttribute(size, 1));
+  geo.setAttribute('aPhase',   new THREE.BufferAttribute(phase, 1));
+  geo.setAttribute('aAlpha',   new THREE.BufferAttribute(alpha, 1));
+  geo.setAttribute('aColor',   new THREE.BufferAttribute(col, 3));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:  { value: 0 },
+      uScale: { value: 1000 }
+    },
+    vertexShader: /* glsl */`
+      uniform float uTime;
+      uniform float uScale;
+      attribute float aSize;
+      attribute float aPhase;
+      attribute float aAlpha;
+      attribute vec3  aColor;
+      varying float vAlpha;
+      varying vec3  vColor;
+
+      void main() {
+        vec3 p = position;
+        // 缓慢漂移 + 上下浮动
+        p.x += sin(uTime * 0.11 + aPhase * 62.83) * 3.2;
+        p.y += sin(uTime * 0.19 + aPhase * 113.1) * 2.3;
+        p.z += cos(uTime * 0.09 + aPhase * 81.0) * 3.2;
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float depth = max(-mv.z, 0.5);
+
+        gl_PointSize = clamp(aSize * uScale / depth, 0.6, 42.0);
+        gl_Position = projectionMatrix * mv;
+
+        float nearFade = smoothstep(1.0, 14.0, depth);
+        float farFade  = 1.0 - smoothstep(170.0, 300.0, depth);
+        vAlpha = aAlpha * nearFade * farFade;
+        vColor = aColor;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      varying float vAlpha;
+      varying vec3  vColor;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float d = dot(c, c) * 4.0;
+        if (d > 1.0) discard;
+        float a = 1.0 - d;
+        a = a * a;
+        gl_FragColor = vec4(vColor, a * vAlpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending
+  });
+
+  return new THREE.Points(geo, mat);
+}
+
+const dust = buildDust();
+scene.add(dust);
+
+// —— 余烬：极少量的橙色粒子，向上飘，暗示看不见的余温 ——
+const EMBER_COUNT = 420;
+
+function buildEmbers() {
+  const geo = new THREE.BufferGeometry();
+  const pos   = new Float32Array(EMBER_COUNT * 3);
+  const phase = new Float32Array(EMBER_COUNT);
+  const size  = new Float32Array(EMBER_COUNT);
+
+  for (let i = 0; i < EMBER_COUNT; i++) {
+    pos[i * 3 + 0] = (Math.random() - 0.5) * 170;
+    pos[i * 3 + 1] = Math.random() * 80 - 10;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 220 - 40;
+
+    phase[i] = Math.random();
+    size[i]  = 0.05 + Math.random() * 0.14;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aPhase',   new THREE.BufferAttribute(phase, 1));
+  geo.setAttribute('aSize',    new THREE.BufferAttribute(size, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:  { value: 0 },
+      uScale: { value: 1000 }
+    },
+    vertexShader: /* glsl */`
+      uniform float uTime;
+      uniform float uScale;
+      attribute float aPhase;
+      attribute float aSize;
+      varying float vAlpha;
+
+      void main() {
+        vec3 p = position;
+        // 向上循环飘升
+        float rise = uTime * (0.55 + aPhase * 1.45);
+        p.y = mod(p.y + rise + 12.0, 84.0) - 12.0;
+        p.x += sin(uTime * 0.5 + aPhase * 30.0) * 2.4;
+        p.z += cos(uTime * 0.42 + aPhase * 22.0) * 2.4;
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float depth = max(-mv.z, 0.5);
+        gl_PointSize = clamp(aSize * uScale / depth, 0.8, 30.0);
+        gl_Position = projectionMatrix * mv;
+
+        // 越高越暗，像正在熄灭的余烬
+        float lifeFade = 1.0 - smoothstep(30.0, 78.0, p.y);
+        float flicker  = 0.65 + 0.35 * sin(uTime * 6.0 + aPhase * 40.0);
+        float nearFade = smoothstep(1.0, 12.0, depth);
+        vAlpha = lifeFade * flicker * nearFade * 0.9;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      varying float vAlpha;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float d = dot(c, c) * 4.0;
+        if (d > 1.0) discard;
+        float a = 1.0 - d;
+        a = a * a * a;
+        gl_FragColor = vec4(1.0, 0.42, 0.16, a * vAlpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+
+  return new THREE.Points(geo, mat);
+}
+
+const embers = buildEmbers();
+scene.add(embers);
+
+/* =========================================================================
+   8. 后期处理
+   ========================================================================= */
+const composer = new EffectComposer(renderer);
+composer.setSize(window.innerWidth, window.innerHeight);
+
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+// Bloom：只让尘埃与地平线微光产生柔和辉光，绝不 bloom 出太阳
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.80,   // strength
+  0.50,   // radius
+  0.60    // threshold
+);
+composer.addPass(bloomPass);
+
+// 色调映射 + 色彩空间转换（放在调色 pass 之前，让调色工作在显示空间）
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+
+// 自定义调色 Pass：暗角 + 胶片颗粒 + 色差 + 颜色分级
+const FilmGradeShader = {
+  uniforms: {
+    tDiffuse:    { value: null },
+    uTime:       { value: 0 },
+    uResolution: { value: new THREE.Vector2(1, 1) }
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform vec2  uResolution;
+    varying vec2 vUv;
+
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec2 uv = vUv;
+      vec2 centered = uv - 0.5;
+      float dist = length(centered);
+      vec2 dir = centered / max(dist, 1e-5);
+
+      // —— 轻微色差：越靠边缘越明显 ——
+      float ca = 0.0013 + 0.0042 * dist;
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv - dir * ca).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv + dir * ca).b;
+
+      // —— 颜色分级 ——
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      // 阴影偏紫
+      col += vec3(0.050, 0.016, 0.082) * (1.0 - smoothstep(0.0, 0.46, lum));
+      // 高光偏橙
+      col += vec3(0.085, 0.034, -0.018) * smoothstep(0.32, 1.0, lum);
+
+      // 降饱和
+      float l2 = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(col, vec3(l2), 0.28);
+
+      // 整体轻微偏暖 + 轻微提亮
+      col *= vec3(1.025, 0.985, 0.950);
+      col *= 1.015;
+
+      // —— 暗角 ——
+      float vig = smoothstep(1.15, 0.26, dist * 1.38);
+      col *= mix(0.26, 1.0, vig);
+
+      // —— 胶片颗粒 ——
+      vec2 gseed = uv * uResolution + vec2(uTime * 73.0, uTime * 51.0);
+      float grain = rand(gseed);
+      col += (grain - 0.5) * 0.055;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+};
+
+const filmPass = new ShaderPass(FilmGradeShader);
+composer.addPass(filmPass);
+
+/* =========================================================================
+   9. 背景乌鸦音效（循环往复）
+      —— 播放完一次 → 等待 5 秒 → 再播放下一次
+      —— 音量固定为原音量的 60%
+      —— URL 留空则不播放
+   ========================================================================= */
+let crowAudio      = null;   // Audio 实例
+let crowAudioReady = false;  // URL 有效且实例已创建
+let crowAudioTimer = null;   // 间隔定时器
+let gestureBound   = false;  // 是否已绑定用户交互监听
+
+/**
+ * 初始化音频实例
+ */
+function initCrowAudio() {
+  if (!CROW_AUDIO_URL || CROW_AUDIO_URL.trim() === '../audio.mp3') {
+    console.info('[Crow Audio] 未填写音频 URL，跳过音频初始化。');
+    return;
+  }
+
+  crowAudio = new Audio(CROW_AUDIO_URL);
+  crowAudio.volume = CROW_AUDIO_VOLUME;   // 60% 音量
+  crowAudio.preload = 'auto';
+  crowAudio.loop = false;                 // 单次播放，由 ended 事件驱动循环
+
+  // 一次播放结束 → 等待 5 秒 → 再播放下一次
+  crowAudio.addEventListener('ended', () => {
+    crowAudioTimer = setTimeout(() => {
+      tryPlayCrowAudio();
+    }, CROW_AUDIO_INTERVAL * 1000);
+  });
+
+  crowAudio.addEventListener('error', () => {
+    console.warn('[Crow Audio] 音频加载失败，请检查 URL 是否正确：', CROW_AUDIO_URL);
+  });
+
+  crowAudioReady = true;
+}
+
+/**
+ * 尝试播放音频（防止重复播放 / 打断）
+ */
+function tryPlayCrowAudio() {
+  if (!crowAudioReady || !crowAudio) return;
+
+  // 清除待执行的定时器，避免重复排队
+  if (crowAudioTimer) {
+    clearTimeout(crowAudioTimer);
+    crowAudioTimer = null;
+  }
+
+  // 上一次还在播放则跳过本次
+  if (!crowAudio.paused) return;
+
+  const p = crowAudio.play();
+  if (p && typeof p.catch === 'function') {
+    p.catch(() => {
+      // 浏览器自动播放策略限制：等待用户首次交互后再启动
+      waitForUserGesture();
+    });
+  }
+}
+
+/**
+ * 浏览器通常禁止无交互自动播放音频
+ * 因此在首次用户交互（点击 / 按键 / 触摸）后启动播放
+ */
+function waitForUserGesture() {
+  if (gestureBound) return;
+  gestureBound = true;
+
+  const start = () => {
+    window.removeEventListener('pointerdown', start);
+    window.removeEventListener('keydown', start);
+    window.removeEventListener('touchstart', start);
+    gestureBound = false;
+    tryPlayCrowAudio();
+  };
+
+  window.addEventListener('pointerdown', start, { once: true });
+  window.addEventListener('keydown', start, { once: true });
+  window.addEventListener('touchstart', start, { once: true });
+}
+
+// 启动音频系统
+initCrowAudio();
+// 页面加载后尝试首次播放（若无自动播放权限，将自动等待用户交互）
+setTimeout(() => { tryPlayCrowAudio(); }, 800);
+
+/* =========================================================================
+   10. ★ 悬浮文字交互
+      —— 初始显示 APOCALYPSE（全大写艺术字体）
+      —— 点击后切换为当前数字时间（小时:分钟），每秒同步
+      —— 再次点击切回 APOCALYPSE
+      —— 每次切换都重新播放「从底部向上浮出」动画
+   ========================================================================= */
+const overlayTextEl = document.getElementById('overlayText');
+const textInnerEl   = document.getElementById('textInner');
+
+const WORD_TEXT = 'APOCALYPSE';
+
+let showingTime = false;    // 当前是否显示时间
+let timeTicker  = null;     // 每秒刷新定时器
+
+/**
+ * 格式化当前时间为 HH:MM
+ */
+function formatNow() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  return hh + ':' + mm;
+}
+
+/**
+ * 重新触发「从底部向上浮出」动画
+ * 通过移除类 → 强制重排 → 重新添加类 的方式重启动画
+ */
+function replayRise() {
+  textInnerEl.classList.remove('rise');
+  // 强制浏览器重排，使动画能够重新开始
+  void textInnerEl.offsetWidth;
+  textInnerEl.classList.add('rise');
+}
+
+/**
+ * 切换到「时间」状态
+ */
+function showTime() {
+  showingTime = true;
+  textInnerEl.textContent = formatNow();
+  replayRise();
+
+  // 每秒同步，保证分钟变化时自动刷新
+  if (timeTicker) clearInterval(timeTicker);
+  timeTicker = setInterval(() => {
+    if (!showingTime) return;
+    textInnerEl.textContent = formatNow();
+  }, 1000);
+}
+
+/**
+ * 切换到「APOCALYPSE」状态
+ */
+function showWord() {
+  showingTime = false;
+  if (timeTicker) {
+    clearInterval(timeTicker);
+    timeTicker = null;
+  }
+  textInnerEl.textContent = WORD_TEXT;
+  replayRise();
+}
+
+// 点击切换
+overlayTextEl.addEventListener('click', () => {
+  if (showingTime) showWord();
+  else             showTime();
+});
+
+// 键盘无障碍：Enter / Space 也可触发
+overlayTextEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    overlayTextEl.click();
+  }
+});
+
+/* =========================================================================
+   11. 相机运动与交互
+   ========================================================================= */
+const CAM_Z = 46;
+const CAM_X = 0;
+// 依据地形高度决定相机高度，避免相机陷进山体
+const camGroundY = terrainHeight(CAM_X, CAM_Z);
+const camBase  = new THREE.Vector3(CAM_X, camGroundY + 12.0, CAM_Z);
+const lookBase = new THREE.Vector3(0, 27, -45);
+
+camera.position.copy(camBase);
+camera.lookAt(lookBase);
+
+// 鼠标视差
+const pointer = { x: 0, y: 0 };
+const pointerTarget = { x: 0, y: 0 };
+
+window.addEventListener('pointermove', (e) => {
+  pointerTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointerTarget.y = (e.clientY / window.innerHeight) * 2 - 1;
+});
+
+/* =========================================================================
+   12. Resize
+   ========================================================================= */
+function updatePointScale() {
+  const h = renderer.domElement.height;      // 物理像素高度
+  const fovRad = THREE.MathUtils.degToRad(camera.fov);
+  const scale = h / (2 * Math.tan(fovRad / 2));
+  dust.material.uniforms.uScale.value = scale;
+  embers.material.uniforms.uScale.value = scale;
+}
+
+function onResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+
+  const dpr = renderer.getPixelRatio();
+  filmPass.uniforms.uResolution.value.set(w * dpr, h * dpr);
+
+  updatePointScale();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+/* =========================================================================
+   13. 动画循环
+   ========================================================================= */
+const clock = new THREE.Clock();
+let elapsed = 0;
+
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  elapsed += dt;
+  const t = elapsed;
+
+  /* ---- 天空缓慢流动 ---- */
+  skyUniforms.uTime.value = t;
+
+  /* ---- 尘土 / 余烬 ---- */
+  dust.material.uniforms.uTime.value = t;
+  embers.material.uniforms.uTime.value = t;
+
+  /* ---- 乌鸦盘旋 ---- */
+  for (let i = 0; i < crows.length; i++) {
+    const c = crows[i];
+
+    evalCrowPos(c, t, _crowPos);
+    evalCrowPos(c, t + 0.06, _crowNext);
+
+    c.group.position.copy(_crowPos);
+
+    // 面向飞行方向（身体沿 +Z 建模，因此 lookAt 后需要绕 Y 转 180°）
+    c.group.lookAt(_crowNext);
+    c.group.rotateY(Math.PI);
+
+    // 机械而缓慢的扇翅
+    const flap = Math.sin(t * c.flapSpeed + c.flapPhase) * 0.68;
+    c.wingR.rotation.z = flap;
+    c.wingL.rotation.z = -flap;
+  }
+
+  /* ---- 相机：缓慢推进 + 轻微摇晃 + 鼠标视差 ---- */
+  pointer.x += (pointerTarget.x - pointer.x) * Math.min(dt * 2.4, 1.0);
+  pointer.y += (pointerTarget.y - pointer.y) * Math.min(dt * 2.4, 1.0);
+
+  const driftZ = Math.sin(t * 0.055) * 4.5;          // 极缓慢的推进/后撤
+  const swayX  = Math.sin(t * 0.17) * 1.6;           // 轻微横向摇晃
+  const swayY  = Math.sin(t * 0.23 + 1.3) * 0.9;     // 轻微上下呼吸
+
+  camera.position.set(
+    camBase.x + swayX + pointer.x * 4.2,
+    camBase.y + swayY - pointer.y * 2.8,
+    camBase.z + driftZ
+  );
+
+  camera.lookAt(
+    lookBase.x + pointer.x * 2.4,
+    lookBase.y - pointer.y * 1.8,
+    lookBase.z
+  );
+
+  /* ---- 后期 ---- */
+  filmPass.uniforms.uTime.value = t;
+
+  composer.render();
+}
+
+renderer.setAnimationLoop(animate);
+</script>
+</body>
+</html>
