@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>APOCALYPSE · 入口</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: #060406;
+    color: #e0b487;
+    font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* =========================================================
+     背景：黄昏与黑色的交接
+     从上方的暗紫夜空，落入暖橙地平线，再沉入底部纯黑
+     ========================================================= */
+  .bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(
+      180deg,
+      #1a1018 0%,
+      #2a1a22 14%,
+      #4a2a32 30%,
+      #8a4a2a 44%,
+      #c97a3a 56%,
+      #e08a3c 64%,
+      #6a3a24 76%,
+      #1a0e0a 88%,
+      #060406 100%
+    );
+  }
+
+  /* 地平线附近最后一点余温 —— 太阳已经沉下去，只剩空气在发光 */
+  .bg::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 64%;
+    width: 140vw;
+    height: 30vh;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(
+      50% 50% at 50% 50%,
+      rgba(255, 176, 96, 0.45) 0%,
+      rgba(255, 150, 70, 0.18) 40%,
+      rgba(255, 150, 70, 0) 72%
+    );
+    filter: blur(14px);
+    pointer-events: none;
+  }
+
+  /* 暗角 */
+  .vignette {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: radial-gradient(
+      120% 95% at 50% 55%,
+      rgba(0, 0, 0, 0) 32%,
+      rgba(0, 0, 0, 0.52) 76%,
+      rgba(0, 0, 0, 0.90) 100%
+    );
+  }
+
+  /* 胶片颗粒 */
+  .grain {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+    opacity: 0.12;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: grainPulse 3.6s ease-in-out infinite;
+  }
+  @keyframes grainPulse {
+    0%, 100% { opacity: 0.09; }
+    50%      { opacity: 0.15; }
+  }
+
+  /* =========================================================
+     页面骨架
+     ========================================================= */
+  .page {
+    position: relative;
+    z-index: 10;
+    min-height: 100vh;
+    min-height: 138vh;          /* 制造下滑空间，让页脚沉在底部 */
+    display: flex;
+    flex-direction: column;
+    padding: clamp(24px, 4.5vw, 60px);
+  }
+
+  .stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: clamp(28px, 6vh, 68px);
+    padding-top: clamp(6px, 3vh, 32px);
+  }
+
+  /* =========================================================
+     标题：左上角，60% 不透明度的大写 APOCALYPSE
+     ========================================================= */
+  .title {
+    margin: 0;
+    font-family: "Haettenschweiler", "Impact", "Franklin Gothic Heavy",
+                 "Arial Black", "Helvetica Neue", sans-serif;
+    font-weight: 900;
+    font-size: clamp(2.6rem, 9.5vw, 9rem);
+    line-height: 0.92;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #e0b487;
+    opacity: 0.6;                                  /* ← 60% */
+    text-shadow: 0 0 44px rgba(255, 140, 60, 0.20);
+    animation:
+      titleIn   1.6s cubic-bezier(.16, .84, .28, 1) both,
+      titleGlow 7s   ease-in-out infinite 1.6s;
+  }
+  @keyframes titleIn {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 44px, 0);
+      filter: blur(14px);
+      letter-spacing: 0.28em;
+    }
+    100% {
+      opacity: 0.6;
+      transform: translate3d(0, 0, 0);
+      filter: blur(0);
+      letter-spacing: 0.06em;
+    }
+  }
+  @keyframes titleGlow {
+    0%, 100% { text-shadow: 0 0 40px rgba(255, 140, 60, 0.16); }
+    50%      { text-shadow: 0 0 76px rgba(255, 140, 60, 0.34); }
+  }
+
+  /* =========================================================
+     入口：简洁直角方体
+     ========================================================= */
+  .entries {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    animation: fadeUp 1.2s cubic-bezier(.16, .84, .28, 1) 0.55s both;
+  }
+  @keyframes fadeUp {
+    0%   { opacity: 0; transform: translate3d(0, 28px, 0); }
+    100% { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  .entry {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 18px;
+    min-width: clamp(220px, 25vw, 300px);
+    padding: 18px 22px;
+
+    /* 直角方体：无圆角 */
+    border-radius: 0;
+    border: 1px solid rgba(224, 180, 135, 0.30);
+    background: rgba(14, 9, 9, 0.42);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+
+    color: #d8a87a;
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.20em;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+
+    transition:
+      border-color   .35s ease,
+      background-color .35s ease,
+      color          .35s ease,
+      box-shadow     .35s ease,
+      transform      .12s ease;
+  }
+
+  .entry .idx {
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    opacity: 0.55;
+    transition: opacity .35s ease;
+  }
+  .entry .label { flex: 1; }
+  .entry .arrow {
+    font-size: 1rem;
+    opacity: 0.55;
+    transition: transform .35s ease, opacity .35s ease;
+  }
+
+  .entry:hover {
+    border-color: rgba(255, 170, 90, 0.78);
+    background: rgba(58, 28, 14, 0.55);
+    color: #ffd6a8;
+    box-shadow:
+      0 0 0 1px rgba(255, 170, 90, 0.12),
+      0 14px 44px rgba(255, 110, 40, 0.16);
+  }
+  .entry:hover .arrow { transform: translateX(6px); opacity: 1; }
+  .entry:hover .idx   { opacity: 0.9; }
+
+  .entry:active {
+    transform: translateY(1px) scale(0.996);
+    box-shadow: inset 0 0 34px rgba(255, 120, 40, 0.28);
+  }
+
+  .entry:focus-visible {
+    outline: 1px solid rgba(255, 170, 90, 0.85);
+    outline-offset: 3px;
+  }
+
+  /* =========================================================
+     页脚：音频来源与侵权声明
+     ========================================================= */
+  .footer {
+    margin-top: clamp(80px, 18vh, 180px);
+    padding-top: 22px;
+    border-top: 1px solid rgba(224, 180, 135, 0.14);
+    max-width: 720px;
+    font-size: 0.76rem;
+    line-height: 1.95;
+    letter-spacing: 0.04em;
+    color: rgba(224, 180, 135, 0.46);
+    animation: fadeUp 1.2s cubic-bezier(.16, .84, .28, 1) 0.95s both;
+  }
+  .footer p { margin: 0 0 8px; }
+  .footer p:last-of-type { margin-bottom: 0; }
+
+  .footer a {
+    color: rgba(224, 180, 135, 0.74);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(224, 180, 135, 0.26);
+    transition: color .3s ease, border-color .3s ease;
+  }
+  .footer a:hover {
+    color: #ffd6a8;
+    border-color: rgba(255, 170, 90, 0.72);
+  }
+
+  .scroll-hint {
+    margin-top: 18px;
+    font-size: 0.66rem;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    opacity: 0.30;
+    animation: hintBlink 2.8s ease-in-out infinite;
+  }
+  @keyframes hintBlink {
+    0%, 100% { opacity: 0.18; transform: translateY(0); }
+    50%      { opacity: 0.55; transform: translateY(3px); }
+  }
+
+  /* =========================================================
+     点击闪光：末日感的"被光吞没"
+     ========================================================= */
+  .flash {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      circle at 50% 62%,
+      #fff4e2 0%,
+      #ffb066 38%,
+      #b04a1a 68%,
+      #180a05 100%
+    );
+  }
+  body.is-flashing .flash {
+    animation: flashOut 0.55s cubic-bezier(.2, .7, .3, 1) forwards;
+  }
+  @keyframes flashOut {
+    0%   { opacity: 0; }
+    14%  { opacity: 0.88; }
+    100% { opacity: 1; }
+  }
+
+  /* =========================================================
+     响应式
+     ========================================================= */
+  @media (max-width: 760px) {
+    .page { min-height: 150vh; }
+    .entries { flex-direction: column; }
+    .entry { width: 100%; min-width: 0; }
+    .title { font-size: clamp(2.2rem, 13.5vw, 4.4rem); }
+  }
+
+  @media (max-height: 560px) {
+    .stage { gap: 20px; }
+    .title { font-size: clamp(2rem, 10vw, 4rem); }
+    .page  { min-height: 170vh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .title, .entries, .footer, .grain, .scroll-hint { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 背景层 -->
+<div class="bg"></div>
+<div class="vignette"></div>
+<div class="grain"></div>
+
+<!-- 点击闪光层 -->
+<div class="flash"></div>
+
+<!-- 内容 -->
+<div class="page">
+  <div class="stage">
+
+    <!-- 左上角标题：60% 不透明度的大写 APOCALYPSE -->
+    <h1 class="title">apocalypse</h1>
+
+    <!-- 两个入口 -->
+    <nav class="entries" aria-label="版本入口">
+      <a class="entry" href="code/glm.html">
+        <span class="idx">01</span>
+        <span class="label">GLM 版本</span>
+        <span class="arrow" aria-hidden="true">→</span>
+      </a>
+      <a class="entry" href="code/ds.html">
+        <span class="idx">02</span>
+        <span class="label">DS 版本</span>
+        <span class="arrow" aria-hidden="true">→</span>
+      </a>
+    </nav>
+
+  </div>
+
+  <!-- 底部：音频来源与侵权声明 -->
+  <footer class="footer">
+    <p>
+      本页面及子页面中的乌鸦音效素材来源于
+      <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a>，
+      遵循 Pixabay 内容许可协议，仅用于个人学习、研究与非商业展示用途。
+    </p>
+    <p>
+      若相关素材的权利人认为本页面的使用方式构成侵权，请通过页面署名或项目仓库 Issue 联系作者，
+      我们将在收到通知后第一时间删除相关内容并停止使用。
+    </p>
+    <div class="scroll-hint">Scroll ↓</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var entries = document.querySelectorAll('.entry');
+
+  entries.forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      var href = el.getAttribute('href');
+      if (!href) return;
+
+      // 防止重复触发
+      if (document.body.classList.contains('is-flashing')) {
+        e.preventDefault();
+        return;
+      }
+
+      e.preventDefault();
+      document.body.classList.add('is-flashing');
+
+      // 闪光吞没画面的瞬间跳转，制造末日感
+      window.setTimeout(function () {
+        window.location.href = href;
+      }, 520);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
